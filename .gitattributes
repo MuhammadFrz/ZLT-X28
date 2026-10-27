@@ -1,0 +1,13 @@
+*.lua text eol=lf
+*.htm text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.sh text eol=lf
+*.cjs text eol=lf
+*.c text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+overlay/etc/init.d/* text eol=lf
+overlay/usr/libexec/* text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf

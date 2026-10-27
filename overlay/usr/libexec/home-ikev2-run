@@ -1,0 +1,53 @@
+#!/bin/sh
+set -eu
+umask 077
+base=/data/home-ikev2
+exec >"$base/control/supervisor.log" 2>&1
+control=/usr/libexec/home-ikev2-control
+uri=unix:///data/home-ikev2/control/charon.vici
+export STRONGSWAN_CONF="$base/active/strongswan.conf"
+sw() { timeout 20 "$base/bin/swanctl" "$@" --uri "$uri"; }
+cleanup() {
+ trap - EXIT INT TERM HUP
+ "$control" stop-daemon || true
+ if [ -n "${pid:-}" ]; then wait "$pid" 2>/dev/null || true;fi
+ lua /usr/libexec/home-ikev2-xfrm.lua || true
+ "$control" detach || true
+ rm -f "$base/control/heartbeat" "$base/control/sa.raw" "$base/control/vip" "$base/control/supervisor.pid"
+ # Rejects and blackhole routes survive daemon failure and procd restarts.
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+test -f "$base/enabled"
+printf '%s\n' "$$" >"$base/control/supervisor.pid"
+"$control" guard
+"$control" stop-daemon
+if pidof charon >/dev/null; then exit 1;fi
+lua /usr/libexec/home-ikev2-xfrm.lua
+rm -f "$base/control/charon.vici" "$base/control/attached"
+"$base/bin/charon" >"$base/control/daemon.log" 2>&1 &
+pid=$!
+printf '%s\n' "$pid" >"$base/control/daemon.pid"
+i=0
+while [ ! -S "$base/control/charon.vici" ]; do
+ kill -0 "$pid";i=$((i+1));test "$i" -lt 10;sleep 1
+done
+sw --load-all --file "$base/active/swanctl.conf" >"$base/control/load.log" 2>&1
+while [ -f "$base/enabled" ]; do
+ kill -0 "$pid"
+ if ! sw --list-sas --raw >"$base/control/sa.raw" 2>/dev/null; then exit 1;fi
+ if lua /usr/libexec/home-ikev2-config.lua observe >/dev/null 2>&1; then
+  vip=$(cat "$base/control/vip")
+  if [ ! -f "$base/control/attached" ] || [ "${attached_vip:-}" != "$vip" ]; then
+   "$control" detach
+   "$control" attach
+   attached_vip=$vip
+  fi
+  date +%s >"$base/control/heartbeat"
+ else
+  "$control" detach
+  rm -f "$base/control/heartbeat"
+  sw --initiate --child isolated --timeout 15 >"$base/control/auth.log" 2>&1 || true
+ fi
+ sleep 3
+done

@@ -1,0 +1,205 @@
+#!/bin/sh
+set -eu
+umask 077
+case "${1:-}" in
+ enable|disable|trial)
+  if [ "${HOME_VPN_OPERATION_LOCKED:-}" != 1 ]; then exec lua /usr/libexec/home-vpn-operation.lua ikev2 "$1"; fi ;;
+esac
+base=/data/home-ikev2
+acceleration() { lua /usr/libexec/home-tunnel-acceleration.lua "$1"; }
+four() { iptables -w 3 "$@"; }
+six() { ip6tables -w 3 "$@"; }
+ensure4() { four -C "$@" 2>/dev/null || four -I "$@"; }
+ensure6() { six -C "$@" 2>/dev/null || six -I "$@"; }
+guard() {
+ test -f "$base/enabled"
+ test -f "$base/routing-owned"
+ # Install rejects before routing or acceleration changes. Keep them on service loss.
+ four -N X28_IKE_F 2>/dev/null || true
+ six -N X28_IKE_F 2>/dev/null || true
+ ensure4 X28_IKE_F -j REJECT --reject-with icmp-net-unreachable
+ ensure4 X28_IKE_F -o x28ikev2 -j ACCEPT
+ ensure4 X28_IKE_F -d 192.168.70.0/24 -j RETURN
+ ensure4 FORWARD -i br0 -j X28_IKE_F
+ ensure4 FORWARD -i x28ikev2 -o br0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+ ensure6 X28_IKE_F -j REJECT --reject-with icmp6-adm-prohibited
+ ensure6 X28_IKE_F -o br0 -j RETURN
+ ensure6 FORWARD -i br0 -j X28_IKE_F
+ four -N X28_IKE_D 2>/dev/null || true
+ six -N X28_IKE_D 2>/dev/null || true
+ four -t nat -N X28_IKE_D 2>/dev/null || true
+ for protocol in udp tcp; do
+  ensure4 X28_IKE_D -p "$protocol" --dport 53 -j REJECT
+  ensure6 X28_IKE_D -p "$protocol" --dport 53 -j REJECT
+  four -t nat -C X28_IKE_D -p "$protocol" --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null ||
+   four -t nat -A X28_IKE_D -p "$protocol" --dport 53 -j DNAT --to-destination 8.8.8.8:53
+ done
+ ensure4 INPUT -i br0 -j X28_IKE_D
+ ensure6 INPUT -i br0 -j X28_IKE_D
+ four -t nat -C PREROUTING -i br0 -j X28_IKE_D 2>/dev/null || four -t nat -I PREROUTING 1 -i br0 -j X28_IKE_D
+ ip route replace blackhole default metric 32767 table 20290
+ ip route replace 192.168.70.0/24 dev br0 table 20290
+ ip -6 route replace unreachable default metric 32767 table 20290
+ if ! ip rule show | grep -q '^10009:.*fwmark 0x4f43.*lookup main'; then
+  test -z "$(ip rule show | sed -n '/^10009:/p')"
+  ip rule add pref 10009 fwmark 0x4f43/0xffffffff lookup main
+ fi
+ if ! ip rule show | grep -q '^10010:.*iif br0.*lookup 20290'; then
+  test -z "$(ip rule show | sed -n '/^10010:/p')"
+  ip rule add pref 10010 iif br0 lookup 20290
+ fi
+ if ! ip -6 rule show | grep -q '^10010:.*iif br0.*lookup 20290'; then
+  test -z "$(ip -6 rule show | sed -n '/^10010:/p')"
+  ip -6 rule add pref 10010 iif br0 lookup 20290
+ fi
+ acceleration off
+}
+detach() {
+ [ -f "$base/routing-owned" ] || return 0
+ rm -f "$base/control/attached"
+ ip route del default dev x28ikev2 metric 10 table 20290 2>/dev/null || true
+ four -t nat -D POSTROUTING -s 192.168.70.0/24 -o x28ikev2 -j X28_IKE_S 2>/dev/null || true
+ four -t nat -F X28_IKE_S 2>/dev/null || true
+ four -t nat -X X28_IKE_S 2>/dev/null || true
+ ip link del dev x28ikev2 2>/dev/null || true
+}
+attach() {
+ test -f "$base/enabled"
+ test -f "$base/routing-owned"
+ acceleration verify
+ vip=$(cat "$base/control/vip")
+ case "$vip" in ''|*[!0-9.]*) return 1;; esac
+ if ! ip link show dev x28ikev2 >/dev/null 2>&1; then
+  "$base/bin/xfrmi" --name x28ikev2 --id 20290 --dev ccmni1 --mtu 1400
+ fi
+ ip addr replace "$vip/32" dev x28ikev2
+ ip link set dev x28ikev2 up mtu 1400
+ four -t nat -N X28_IKE_S 2>/dev/null || true
+ four -t nat -F X28_IKE_S
+ four -t nat -A X28_IKE_S -j SNAT --to-source "$vip"
+ four -t nat -C POSTROUTING -s 192.168.70.0/24 -o x28ikev2 -j X28_IKE_S 2>/dev/null ||
+  four -t nat -I POSTROUTING 1 -s 192.168.70.0/24 -o x28ikev2 -j X28_IKE_S
+ four -t mangle -C FORWARD -i br0 -o x28ikev2 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null ||
+  four -t mangle -I FORWARD -i br0 -o x28ikev2 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+ ip route replace default dev x28ikev2 metric 10 table 20290
+ touch "$base/control/attached"
+}
+stop_daemon() {
+ if [ -f "$base/control/daemon.pid" ]; then
+  pid=$(cat "$base/control/daemon.pid")
+  case "$pid" in ''|*[!0-9]*) return 1;; esac
+  if [ "$(readlink /proc/"$pid"/exe 2>/dev/null)" = "$base/bin/charon" ]; then
+   kill -TERM "$pid" 2>/dev/null || true
+   for i in 1 2 3; do
+    [ "$(readlink /proc/"$pid"/exe 2>/dev/null)" = "$base/bin/charon" ] || break
+    sleep 1
+   done
+   if [ "$(readlink /proc/"$pid"/exe 2>/dev/null)" = "$base/bin/charon" ]; then kill -KILL "$pid"; fi
+  fi
+ fi
+}
+release() {
+ rm -f "$base/enabled"
+ /etc/init.d/home-ikev2 stop
+ /etc/init.d/home-ikev2 disable
+ if [ -f "$base/control/supervisor.pid" ]; then
+  supervisor=$(cat "$base/control/supervisor.pid")
+  case "$supervisor" in ''|*[!0-9]*) return 1;;esac
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+   if ! tr '\000' ' ' </proc/"$supervisor"/cmdline 2>/dev/null | grep -q '/usr/libexec/home-ikev2-run'; then break;fi
+   sleep 1
+  done
+  if tr '\000' ' ' </proc/"$supervisor"/cmdline 2>/dev/null | grep -q '/usr/libexec/home-ikev2-run'; then kill -KILL "$supervisor";fi
+ fi
+ stop_daemon
+ if [ ! -f "$base/routing-owned" ]; then
+  lua /usr/libexec/home-ikev2-xfrm.lua
+  return 0
+ fi
+ detach
+ four -D FORWARD -i br0 -j X28_IKE_F 2>/dev/null || true
+ four -D FORWARD -i x28ikev2 -o br0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+ six -D FORWARD -i br0 -j X28_IKE_F 2>/dev/null || true
+ four -D INPUT -i br0 -j X28_IKE_D 2>/dev/null || true
+ six -D INPUT -i br0 -j X28_IKE_D 2>/dev/null || true
+ four -t nat -D PREROUTING -i br0 -j X28_IKE_D 2>/dev/null || true
+ four -t mangle -D FORWARD -i br0 -o x28ikev2 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+ for family in four six; do
+  for chain in X28_IKE_F X28_IKE_D; do "$family" -F "$chain" 2>/dev/null || true;"$family" -X "$chain" 2>/dev/null || true;done
+ done
+ four -t nat -F X28_IKE_D 2>/dev/null || true
+ four -t nat -X X28_IKE_D 2>/dev/null || true
+ ip rule del pref 10009 fwmark 0x4f43/0xffffffff lookup main 2>/dev/null || true
+ ip rule del pref 10010 iif br0 lookup 20290 2>/dev/null || true
+ ip -6 rule del pref 10010 iif br0 lookup 20290 2>/dev/null || true
+ ip route del 192.168.70.0/24 dev br0 table 20290 2>/dev/null || true
+ ip route del blackhole default metric 32767 table 20290 2>/dev/null || true
+ ip -6 route del unreachable default metric 32767 table 20290 2>/dev/null || true
+ # Keep ownership and block another VPN if cleanup could not be confirmed.
+ test ! -e /sys/class/net/x28ikev2
+ test -z "$(ip rule show | sed -n '/^10009:/p;/^10010:/p')"
+ test -z "$(ip -6 rule show | sed -n '/^10010:/p')"
+ test -z "$(ip route show table 20290)"
+ test -z "$(ip -6 route show table 20290)"
+ for family in four six; do
+  for table in filter nat mangle; do
+   if "$family" -t "$table" -S 2>/dev/null | grep -q X28_IKE_; then return 1;fi
+  done
+ done
+ acceleration restore
+ lua /usr/libexec/home-ikev2-xfrm.lua
+ rm -f "$base/routing-owned" "$base/active/swanctl.conf" "$base/active/ca.pem"
+}
+enable_common() {
+ test ! -f /data/home-openvpn/control/active
+ test ! -f /data/home-tunnel/enabled
+ test ! -f /data/home-tunnel/acceleration-journal.json
+ test -z "$(ip rule show | sed -n '/^10000:/p')"
+ test -z "$(ip -6 rule show | sed -n '/^10000:/p')"
+ test -z "$(ip route show table 20280)"
+ test -z "$(ip -6 route show table 20280)"
+ test ! -f "$base/enabled"
+ test ! -f "$base/routing-owned"
+ test ! -f "$base/xfrm-cleanup-pending"
+ test ! -d "$base/check.lock"
+ test ! -e /sys/class/net/x28ikev2
+ if pidof charon >/dev/null; then return 1;fi
+ ip xfrm state count | grep -q 'SAD count 0'
+ ip xfrm policy count | grep -q 'SPD IN  0 OUT 0 FWD 0'
+ test -z "$(ip rule show | sed -n '/^10009:/p;/^10010:/p')"
+ test -z "$(ip -6 rule show | sed -n '/^10010:/p')"
+ test -z "$(ip route show table 20290)"
+ test -z "$(ip -6 route show table 20290)"
+ for family in four six; do
+  for table in filter nat mangle; do
+   if "$family" -t "$table" -S 2>/dev/null | grep -Eq 'X28_IKE_|X28_TUNNEL'; then return 1;fi
+  done
+ done
+ for name in charon swanctl xfrmi owned-xfrm; do test -x "$base/bin/$name";done
+ lua /usr/libexec/home-ikev2-config.lua prepare
+ mkdir -p "$base/control" /tmp/home-ikev2
+ chmod 700 "$base/control" /tmp/home-ikev2
+ touch "$base/routing-owned" "$base/enabled"
+ # A failed start keeps protection enabled; only explicit Disable removes it.
+ guard
+ /etc/init.d/home-ikev2 start
+}
+case "${1:-}" in
+ guard) guard;;
+ attach) attach;;
+ detach) detach;;
+ stop-daemon) stop_daemon;;
+ enable)
+  grep -qx 'native-xfrm-v1' "$base/routing-verified"
+  enable_common
+  /etc/init.d/home-ikev2 enable;;
+ trial)
+  test -f "$base/full-review/armed"
+  p=$(cat "$base/full-review/watchdog.pid")
+  case "$p" in ''|*[!0-9]*) exit 1;;esac
+  kill -0 "$p"
+  tr '\000' ' ' </proc/"$p"/cmdline | grep -q '/data/home-ikev2/full-review/watchdog.sh'
+  enable_common;;
+ disable) release;;
+ *) exit 2;;
+esac

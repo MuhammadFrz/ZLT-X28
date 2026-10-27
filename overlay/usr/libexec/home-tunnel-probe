@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+umask 077
+base=/data/home-tunnel
+[ -s "$base/probe.json" ]
+mkdir "$base/probe.lock" || exit 1
+pid=
+cleanup() {
+    [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+    rmdir "$base/probe.lock"
+}
+trap cleanup EXIT INT TERM
+"$base/bin/sing-box" check -c "$base/probe.json" >/dev/null 2>&1
+"$base/bin/sing-box" run -c "$base/probe.json" >"$base/probe.log" 2>&1 &
+pid=$!
+sleep 1
+kill -0 "$pid"
+curl --noproxy '' --socks5-hostname 127.0.0.1:10880 -fLsS --connect-timeout 8 --max-time 15 https://www.cloudflare.com/cdn-cgi/trace -o /dev/null

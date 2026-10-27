@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/libexec/home-openvpn-control "${script_type:-}" "${dev:-}"

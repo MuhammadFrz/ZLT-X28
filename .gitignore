@@ -1,0 +1,40 @@
+# Local credentials and provider connection files must stay outside source control.
+.env
+.env.*
+!.env.example
+*.auth
+*.key
+*.pem
+*.p12
+*.pfx
+*.ovpn
+profiles.json
+profile.json
+swanctl.conf
+runtime.log
+*.log
+
+# Local test/build output and private router backups.
+node_modules/
+__pycache__/
+*.py[cod]
+tests/.*-test-*/
+backups/
+private/
+tools/ikev2/bin/
+tools/ikev2/build/
+
+# Private router audit records stay local, including in repository history.
+/docs/BUG_AUDIT.md
+/docs/focused-review-evidence.json
+/docs/full-review-evidence.json
+/docs/ikev2-evidence.json
+/docs/IKEV2_STATUS.md
+/docs/IMPLEMENTATION_STATUS.md
+/docs/OPENVPN_STATUS.md
+/docs/SESSION_CHANGES.md
+/docs/SIMPLE_HOME_ROUTER_PLAN.md
+/docs/transfer-review-evidence.json
+/docs/UI_AUDIT.md
+/docs/VENDOR_ACCELERATION_REVIEW.md
+/docs/VENDOR_INTEGRATION.md

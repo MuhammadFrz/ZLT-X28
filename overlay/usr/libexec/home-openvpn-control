@@ -1,0 +1,138 @@
+#!/bin/sh
+set -eu
+umask 077
+case "${1:-}" in
+ prepare|stop)
+  if [ "${HOME_VPN_OPERATION_LOCKED:-}" != 1 ]; then
+   exec lua /usr/libexec/home-vpn-operation.lua openvpn "$@"
+  fi ;;
+esac
+base=/data/home-openvpn/control
+table=20301
+priority=10011
+four() { iptables -w 3 "$@"; }
+six() { ip6tables -w 3 "$@"; }
+ensure4() {
+ if [ "$1" = -t ]; then
+  local table_name=$2;shift 2
+  four -t "$table_name" -C "$@" 2>/dev/null || four -t "$table_name" -I "$@"
+ else
+  four -C "$@" 2>/dev/null || four -I "$@"
+ fi
+}
+ensure6() { six -C "$@" 2>/dev/null || six -I "$@"; }
+acceleration() { lua /usr/libexec/home-tunnel-acceleration.lua "$1"; }
+valid_name() { case "$1" in ''|*[!A-Za-z0-9_]*) return 1;; esac; }
+valid_dev() { echo "$1" | grep -Eq '^tun[0-9]+$'; }
+
+guard() {
+ four -N X28_OVPN_F 2>/dev/null || true
+ six -N X28_OVPN_F 2>/dev/null || true
+ ensure4 X28_OVPN_F -j REJECT --reject-with icmp-net-unreachable
+ ensure4 X28_OVPN_F -d 192.168.70.0/24 -j RETURN
+ ensure4 FORWARD -i br0 -j X28_OVPN_F
+ ensure6 X28_OVPN_F -j REJECT --reject-with icmp6-adm-prohibited
+ ensure6 X28_OVPN_F -o br0 -j RETURN
+ ensure6 FORWARD -i br0 -j X28_OVPN_F
+ four -t nat -N X28_OVPN_D 2>/dev/null || true
+ four -N X28_OVPN_I 2>/dev/null || true
+ six -N X28_OVPN_I 2>/dev/null || true
+ for protocol in udp tcp; do
+  ensure4 -t nat X28_OVPN_D -p "$protocol" --dport 53 -j DNAT --to-destination 8.8.8.8:53
+  ensure4 X28_OVPN_I -p "$protocol" --dport 53 -j REJECT
+  ensure6 X28_OVPN_I -p "$protocol" --dport 53 -j REJECT
+ done
+ ensure4 INPUT -i br0 -j X28_OVPN_I
+ ensure6 INPUT -i br0 -j X28_OVPN_I
+ ensure4 -t nat PREROUTING -i br0 -j X28_OVPN_D
+ ip route replace blackhole default metric 32767 table "$table"
+ ip route replace 192.168.70.0/24 dev br0 table "$table"
+ if ! ip rule show | grep -q "^$priority:.*iif br0.*lookup $table"; then
+  test -z "$(ip rule show | sed -n "/^$priority:/p")"
+  ip rule add pref "$priority" iif br0 table "$table"
+ fi
+ acceleration off
+}
+
+detach() {
+ test -f "$base/device" || return 0
+ interface=$(cat "$base/device")
+ valid_dev "$interface"
+ ip route del default dev "$interface" metric 10 table "$table" 2>/dev/null || true
+ four -t nat -D POSTROUTING -s 192.168.70.0/24 -o "$interface" -j X28_OVPN_S 2>/dev/null || true
+ four -t nat -F X28_OVPN_S 2>/dev/null || true
+ four -t nat -X X28_OVPN_S 2>/dev/null || true
+ four -D X28_OVPN_F -o "$interface" -j ACCEPT 2>/dev/null || true
+ four -D FORWARD -i "$interface" -o br0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+ four -t mangle -D FORWARD -i br0 -o "$interface" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+}
+
+attach() {
+ test -f "$base/active"
+ interface=$1
+ valid_dev "$interface"
+ test -e "/sys/class/net/$interface"
+ acceleration verify
+ printf '%s\n' "$interface" >"$base/device"
+ four -t nat -N X28_OVPN_S 2>/dev/null || true
+ four -t nat -F X28_OVPN_S
+ four -t nat -A X28_OVPN_S -j MASQUERADE
+ ensure4 -t nat POSTROUTING -s 192.168.70.0/24 -o "$interface" -j X28_OVPN_S
+ ensure4 X28_OVPN_F -o "$interface" -j ACCEPT
+ ensure4 FORWARD -i "$interface" -o br0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+ ensure4 -t mangle FORWARD -i br0 -o "$interface" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+ ip route replace default dev "$interface" metric 10 table "$table"
+}
+
+stop() {
+ test -f "$base/active" || return 0
+ wanted=${1:-}
+ if [ -n "$wanted" ]; then test "$wanted" = "$(cat "$base/active")" || return 0; fi
+ if [ -f "$base/device" ]; then
+  interface=$(cat "$base/device"); valid_dev "$interface"
+  for i in $(seq 1 20); do test -e "/sys/class/net/$interface" || break; sleep 1; done
+  test ! -e "/sys/class/net/$interface"
+ fi
+ detach
+ ip rule del pref "$priority" iif br0 table "$table" 2>/dev/null || true
+ ip route flush table "$table"
+ four -D FORWARD -i br0 -j X28_OVPN_F 2>/dev/null || true
+ six -D FORWARD -i br0 -j X28_OVPN_F 2>/dev/null || true
+ four -F X28_OVPN_F 2>/dev/null || true
+ six -F X28_OVPN_F 2>/dev/null || true
+ four -X X28_OVPN_F 2>/dev/null || true
+ six -X X28_OVPN_F 2>/dev/null || true
+ four -t nat -D PREROUTING -i br0 -j X28_OVPN_D 2>/dev/null || true
+ four -t nat -F X28_OVPN_D 2>/dev/null || true
+ four -t nat -X X28_OVPN_D 2>/dev/null || true
+ four -D INPUT -i br0 -j X28_OVPN_I 2>/dev/null || true
+ six -D INPUT -i br0 -j X28_OVPN_I 2>/dev/null || true
+ four -F X28_OVPN_I 2>/dev/null || true
+ six -F X28_OVPN_I 2>/dev/null || true
+ four -X X28_OVPN_I 2>/dev/null || true
+ six -X X28_OVPN_I 2>/dev/null || true
+ acceleration restore
+ rm -f "$base/active" "$base/device"
+}
+
+case "${1:-}" in
+ prepare)
+  name=${2:-}; valid_name "$name"
+  test "$(uci get "openvpn.$name.config")" = "/data/home-openvpn/$name.ovpn"
+  test ! -f /data/home-tunnel/enabled
+  test ! -f /data/home-ikev2/enabled
+  mkdir -p "$base"; chmod 700 "$base"
+  if [ -f "$base/active" ]; then
+   test "$(cat "$base/active")" = "$name"
+  else
+   test ! -f /data/home-tunnel/acceleration-journal.json
+   test -z "$(ip rule show | sed -n "/^$priority:/p")"
+   test -z "$(ip route show table "$table")"
+   printf '%s\n' "$name" >"$base/active"
+  fi
+  guard ;;
+ up) attach "${2:-}" ;;
+ down) test ! -f "$base/active" || detach ;;
+ stop) stop "${2:-}" ;;
+ *) exit 2 ;;
+esac

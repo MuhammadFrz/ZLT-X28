@@ -1,0 +1,57 @@
+<%# Adapted from LuCI Bootstrap, Apache-2.0; original copyright 2008-2019 LuCI authors. %>
+<%
+local disp = require 'luci.dispatcher'
+local node = disp.context.dispatched
+local current = table.concat(disp.context.requestpath or {}, '/')
+local signed_in = disp.context.authsession ~= nil
+local page_title = current:find('admin/mtk/wifi',1,true) and 'Wi-Fi configuration' or (node and node.title or 'Home')
+local items = {{'overview','Home','M3 10l9-7 9 7v10a1 1 0 0 1-1 1h-6v-7h-4v7H4a1 1 0 0 1-1-1z'},
+ {'wifi','Wi-Fi','M2 8a16 16 0 0 1 20 0M5 12a11 11 0 0 1 14 0M9 16a5 5 0 0 1 6 0M12 20h.01'},
+ {'devices','Devices','M3 4h18v12H3zM8 20h8M12 16v4'},
+ {'internet','Internet','M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18'},
+ {'settings','Settings','M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6'}}
+local function icon(path)
+%><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="<%=path%>"/></svg><%
+end
+luci.http.prepare_content('text/html')
+%>
+<!doctype html>
+<html lang="<%=luci.i18n.context.lang%>">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title><%=pcdata(page_title)%> · X28 Home</title>
+<link rel="stylesheet" href="<%=resource%>/../bootstrap/cascade.css?v=home-20">
+<link rel="stylesheet" href="<%=media%>/home.css?v=home-24">
+<script src="<%=url('admin/translations', luci.i18n.context.lang)%>?v=home-20"></script>
+<script src="<%=resource%>/cbi.js?v=home-20"></script>
+</head>
+<body class="home-shell<%=signed_in and '' or ' home-login'%>" data-page="<%=pcdata(current)%>">
+<a class="skip-link" href="#maincontent">Skip to content</a>
+<header class="home-topbar">
+ <a class="home-brand" href="<%=url('admin/home/overview')%>"><span class="brand-symbol"><% icon('M4 14h16v6H4zM8 17h.01M12 17h.01M8 8a6 6 0 0 1 8 0M5 5a10 10 0 0 1 14 0M12 11h.01') %></span><span>X28 <strong>Home</strong></span></a>
+ <div class="home-top-actions"><span class="local-label">Local management</span><div id="indicators"></div>
+ <% if signed_in then %><button type="button" class="home-menu-toggle" id="home-menu-toggle" aria-expanded="false" aria-controls="home-sidebar">Menu</button><% end %></div>
+</header>
+<% if signed_in then %>
+<aside class="home-sidebar" id="home-sidebar">
+ <div class="nav-caption">YOUR NETWORK</div>
+ <nav class="home-primary" aria-label="Main navigation">
+ <% for _, item in ipairs(items) do local active=current:find('admin/home/'..item[1],1,true) ~= nil %>
+ <a href="<%=url('admin/home/'..item[1])%>"<% if active then %> aria-current="page"<% end %>><% icon(item[3]) %><span><%=item[2]%></span></a>
+ <% end %>
+ </nav>
+ <details class="home-advanced"<%=current:find('admin/home/',1,true) and '' or ' open'%>>
+ <summary>Advanced tools</summary><nav id="home-advanced-nav" aria-label="Advanced navigation"><p>Loading tools…</p></nav></details>
+ <div class="sidebar-footer"><span class="local-dot"></span>On your local network<a href="<%=url('admin/logout')%>">Sign out</a></div>
+</aside>
+<nav class="home-bottom-nav" aria-label="Mobile navigation">
+ <% for _,item in ipairs(items) do local active=current:find('admin/home/'..item[1],1,true) ~= nil %>
+ <a href="<%=url('admin/home/'..item[1])%>"<% if active then %> aria-current="page"<% end %>><% icon(item[3]) %><span><%=item[2]%></span></a>
+ <% end %>
+</nav>
+<% end %>
+<main id="maincontent" class="container home-main" tabindex="-1">
+<noscript><div class="alert-message warning">JavaScript is needed for live updates and advanced settings. The home summaries remain readable.</div></noscript>
+<div id="tabmenu" style="display:none"></div>

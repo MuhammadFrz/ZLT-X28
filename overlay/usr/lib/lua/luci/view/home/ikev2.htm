@@ -1,0 +1,35 @@
+<%+header%>
+<section class="page-heading"><div><p class="eyebrow">VPN</p><h1>IKEV2</h1><p class="page-description">Connect your network through a saved IKEV2 profile.</p></div><a class="btn" href="<%=url('admin/vpn/tunnel')%>">Xray</a></section>
+<% if message then %><div class="alert-message <%=failed and 'error' or ''%>" role="status"><%=pcdata(message)%></div><% end %>
+<div class="home-grid tunnel-setup">
+<section class="home-card span-2" data-ikev2-status="<%=url('admin/vpn/ikev2_status')%>"><div class="card-top"><h2>Your IKEV2 connection</h2><span class="status-pill<%=data.running and ' is-on' or ''%>" role="status" aria-live="polite" data-ikev2-badge><%=data.enabled and (data.running and 'Connected' or 'Internet blocked') or (data.cleanup_pending and 'Off · recovery pending' or 'Off')%></span></div>
+<p data-ikev2-description><%=data.enabled and 'Internet is restricted to IKEV2. If the connection stops, internet stays blocked; local router management remains available.' or 'IKEV2 is off. Turn it on to use the selected profile for all devices. Turning it off restores normal internet.'%></p>
+<p>IPv4 TCP and UDP are supported. IPv6 internet is blocked while enabled to prevent bypass. Device DNS uses Google DNS through the tunnel.</p>
+<% if not data.ready then %><p>The Turkey profile passed whole-network connection and crash-recovery checks. Startup verification is still pending; IKEV2 remains off.</p><% end %>
+<form method="post" action="<%=url('admin/vpn/ikev2')%>" data-vpn-switch-form>
+<input type="hidden" name="token" value="<%=token%>"><input type="hidden" name="action" value="<%=data.enabled and 'disable' or 'enable'%>" data-vpn-switch-action>
+<button class="vpn-switch" type="submit" role="switch" aria-label="IKEV2" aria-checked="<%=data.enabled and 'true' or 'false'%>" data-vpn-switch<%=(not data.enabled and (not data.ready or data.cleanup_pending or not data.selected)) and ' disabled' or ''%>>
+<span class="vpn-switch-track" aria-hidden="true"><span class="vpn-switch-thumb"></span></span><span data-vpn-switch-label><%=data.enabled and 'On' or 'Off'%></span>
+</button></form>
+<% if data.error then %><p role="alert"><%=pcdata(data.error)%></p><% end %>
+</section>
+<% if #data.profiles>0 then %><section class="home-card span-2"><h2>Your IKEV2 profiles</h2><p>Choose the profile to use when connecting. Turn IKEV2 off before changing the selection. Saved credentials stay private.</p>
+<% for _,profile in ipairs(data.profiles) do %><article class="tunnel-connection ikev2-profile"><div class="tunnel-connection-name"><h3 dir="auto"><%=pcdata(profile.label:gsub('^[Ss]urfshark%s*',''))%></h3><p><%=pcdata(profile.server)%><%=data.selected==profile.index and ' · Selected' or ''%></p></div><div class="connection-actions"><form method="post" action="<%=url('admin/vpn/ikev2')%>"><input type="hidden" name="token" value="<%=token%>"><input type="hidden" name="profile" value="<%=profile.index%>"><button class="btn" type="submit" name="action" value="select"<%=(data.selected==profile.index or data.enabled or data.cleanup_pending) and ' disabled' or ''%>><%=data.selected==profile.index and 'Selected' or 'Select profile'%></button></form></div></article><% end %>
+</section><% end %>
+<section class="home-card span-2"><h2>Add an IKEV2 profile</h2><p>Use your VPN provider’s manual-service credentials, server hostname and CA certificate. Adding a profile keeps your existing profiles and selection. </p>
+<form method="post" action="<%=url('admin/vpn/ikev2')%>" autocomplete="off">
+<input type="hidden" name="token" value="<%=token%>"><input type="hidden" name="action" value="save">
+<label for="ikev2-label">Profile name (optional)</label><input id="ikev2-label" name="label" type="text" maxlength="160" placeholder="For example, Germany">
+<label for="ikev2-server">Server address or IP</label><input id="ikev2-server" name="server" type="text" maxlength="253" placeholder="Server hostname, IPv4 or IPv6 address" spellcheck="false" required aria-describedby="ikev2-address-help">
+<p class="field-help" id="ikev2-address-help">Use the server address or IP from your provider’s IKEV2 manual setup, without a URL or port.</p>
+<label for="ikev2-identity">Certificate hostname (required for an IP)</label><input id="ikev2-identity" name="identity" type="text" maxlength="253" placeholder="Corresponding server hostname" spellcheck="false" aria-describedby="ikev2-identity-help">
+<p class="field-help" id="ikev2-identity-help">For an IP connection, enter the corresponding server hostname to verify the server certificate. Leave blank when the server address above is already a hostname.</p>
+<label for="ikev2-user">Manual-service username</label><input id="ikev2-user" name="username" type="password" maxlength="512" autocomplete="off" spellcheck="false" required>
+<label for="ikev2-password">Manual-service password</label><input id="ikev2-password" name="password" type="password" maxlength="512" autocomplete="new-password" required>
+<label for="ikev2-certificate">IKEV2 CA certificate</label><textarea id="ikev2-certificate" name="certificate" rows="7" maxlength="32768" spellcheck="false" placeholder="Paste the complete PEM certificate, including its BEGIN and END lines" required></textarea>
+<p class="field-help">Open your provider’s downloaded .crt file in a text editor and paste its contents. Keep your credentials on this page rather than sending them in chat.</p>
+<button class="btn primary" type="submit">Add IKEV2 profile</button>
+</form></section></div>
+<script src="<%=resource%>/home/vpn-switch.js?v=1"></script>
+<script src="<%=resource%>/home/ikev2.js?v=ikev2-2" defer></script>
+<%+footer%>

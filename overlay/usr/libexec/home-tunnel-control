@@ -1,0 +1,136 @@
+#!/bin/sh
+set -eu
+umask 077
+case "${1:-}" in
+    enable|disable|trial)
+        if [ "${HOME_VPN_OPERATION_LOCKED:-}" != 1 ]; then exec lua /usr/libexec/home-vpn-operation.lua tunnel "$1"; fi ;;
+esac
+base=/data/home-tunnel
+table=20280
+priority=10000
+
+rule4() { iptables -w 3 "$@"; }
+rule6() { ip6tables -w 3 "$@"; }
+ensure4() { rule4 -C "$@" 2>/dev/null || rule4 -I "$@"; }
+ensure6() { rule6 -C "$@" 2>/dev/null || rule6 -I "$@"; }
+acceleration() { lua /usr/libexec/home-tunnel-acceleration.lua "$1"; }
+no_acceleration() { acceleration off; }
+
+guard() {
+    [ -f "$base/enabled" ] || return 1
+    # No TProxy modules are required. The reject path survives a missing TUN route.
+    rule4 -N X28_TUNNEL 2>/dev/null || true
+    ensure4 X28_TUNNEL -j REJECT --reject-with icmp-net-unreachable
+    ensure4 X28_TUNNEL -o x28tun -j ACCEPT
+    ensure4 X28_TUNNEL -d 192.168.70.0/24 -j RETURN
+    ensure4 FORWARD -i br0 -j X28_TUNNEL
+    ensure6 FORWARD -i br0 -j REJECT --reject-with icmp6-adm-prohibited
+    for protocol in udp tcp; do
+        # Reject local DNS if a vendor rewrite ever removes the interception rule.
+        ensure4 INPUT -i br0 -p "$protocol" --dport 53 -j REJECT
+        ensure6 INPUT -i br0 -p "$protocol" --dport 53 -j REJECT
+        rule4 -t nat -C PREROUTING -i br0 -p "$protocol" --dport 53 -j DNAT --to-destination 172.31.255.2 2>/dev/null ||
+        rule4 -t nat -I PREROUTING 1 -i br0 -p "$protocol" --dport 53 -j DNAT --to-destination 172.31.255.2
+    done
+    ip route replace blackhole default table "$table" metric 32767
+    ip route replace 192.168.70.0/24 dev br0 table "$table"
+    if ! ip rule show | grep -q '^10000:.*iif br0.*lookup 20280'; then
+        # Refuse to overwrite an unrelated policy rule using the reserved priority.
+        if ip rule show | grep -q '^10000:'; then return 1; fi
+        ip rule add priority "$priority" iif br0 lookup "$table"
+    fi
+    ip -6 route replace unreachable default table "$table" metric 32767
+    if ! ip -6 rule show | grep -q '^10000:.*iif br0.*lookup 20280'; then
+        if ip -6 rule show | grep -q '^10000:'; then return 1; fi
+        ip -6 rule add priority "$priority" iif br0 lookup "$table"
+    fi
+    no_acceleration
+}
+attach() {
+    [ -f "$base/enabled" ]
+    acceleration verify
+    ip link show x28tun >/dev/null
+    ip route replace default dev x28tun table "$table" metric 10
+}
+release() {
+    test ! -f /data/home-openvpn/control/active
+    if [ -f /data/home-ikev2/enabled ] || [ -f /data/home-ikev2/routing-owned ]; then
+        echo 'Disable Surfshark IKEv2 before changing Network tunnel.' >&2
+        return 1
+    fi
+    # Only an explicit disable removes protection and restores ordinary internet.
+    rm -f "$base/enabled"
+    /etc/init.d/home-tunnel stop
+    /etc/init.d/home-tunnel disable
+    while rule4 -C FORWARD -i br0 -j X28_TUNNEL 2>/dev/null; do rule4 -D FORWARD -i br0 -j X28_TUNNEL; done
+    rule4 -F X28_TUNNEL 2>/dev/null || true
+    rule4 -X X28_TUNNEL 2>/dev/null || true
+    while rule6 -C FORWARD -i br0 -j REJECT --reject-with icmp6-adm-prohibited 2>/dev/null; do
+        rule6 -D FORWARD -i br0 -j REJECT --reject-with icmp6-adm-prohibited
+    done
+    for protocol in udp tcp; do
+        while rule4 -C INPUT -i br0 -p "$protocol" --dport 53 -j REJECT 2>/dev/null; do
+            rule4 -D INPUT -i br0 -p "$protocol" --dport 53 -j REJECT
+        done
+        while rule6 -C INPUT -i br0 -p "$protocol" --dport 53 -j REJECT 2>/dev/null; do
+            rule6 -D INPUT -i br0 -p "$protocol" --dport 53 -j REJECT
+        done
+        while rule4 -t nat -C PREROUTING -i br0 -p "$protocol" --dport 53 -j DNAT --to-destination 172.31.255.2 2>/dev/null; do
+            rule4 -t nat -D PREROUTING -i br0 -p "$protocol" --dport 53 -j DNAT --to-destination 172.31.255.2
+        done
+    done
+    while ip rule show | grep -q '^10000:.*iif br0.*lookup 20280'; do ip rule del priority "$priority" iif br0 lookup "$table"; done
+    while ip -6 rule show | grep -q '^10000:.*iif br0.*lookup 20280'; do ip -6 rule del priority "$priority" iif br0 lookup "$table"; done
+    ip route flush table "$table"
+    ip -6 route flush table "$table"
+    acceleration restore
+}
+
+enable_common() {
+    test ! -f /data/home-openvpn/control/active
+    if [ -f /data/home-ikev2/enabled ] || [ -f /data/home-ikev2/routing-owned ]; then
+        echo 'Disable Surfshark IKEv2 before enabling Network tunnel.' >&2
+        return 1
+    fi
+    [ -s "$base/config.json" ]
+    [ ! -f "$base/enabled" ]
+    if ip rule show | grep -q '^10000:' || ip -6 rule show | grep -q '^10000:'; then
+        echo 'Routing priority 10000 is already in use; activation refused.' >&2
+        return 1
+    fi
+    [ -z "$(ip route show table "$table" 2>/dev/null || true)" ]
+    [ -z "$(ip -6 route show table "$table" 2>/dev/null || true)" ]
+    "$base/bin/sing-box" check -c "$base/config.json" >/dev/null 2>&1
+    /usr/libexec/home-tunnel-probe >/dev/null 2>&1
+    mkdir -p "$base/before-routing"
+    iptables-save >"$base/before-routing/iptables"
+    ip6tables-save >"$base/before-routing/ip6tables"
+    ip rule show >"$base/before-routing/ip-rules"
+    ip route show table all >"$base/before-routing/ip-routes"
+    if ! no_acceleration; then acceleration restore || true;return 1;fi
+    touch "$base/enabled"
+    /etc/init.d/home-tunnel start
+}
+case "${1:-}" in
+    guard) guard ;;
+    attach) attach ;;
+    enable)
+        if ! grep -q '^native-allowlist-v1$' "$base/routing-verified" 2>/dev/null; then
+            echo 'Whole-network routing is not verified; activation is disabled.' >&2
+            exit 1
+        fi
+        enable_common
+        /etc/init.d/home-tunnel enable
+        ;;
+    trial)
+        # Internal verification entry: the UI never calls this path.
+        [ -f "$base/full-review/armed" ]
+        p=$(cat "$base/full-review/watchdog.pid")
+        case "$p" in ''|*[!0-9]*) exit 1;;esac
+        kill -0 "$p"
+        tr '\000' ' ' </proc/"$p"/cmdline | grep -q '/data/home-tunnel/full-review/watchdog.sh'
+        enable_common
+        ;;
+    disable) release ;;
+    *) exit 2 ;;
+esac

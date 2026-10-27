@@ -1,0 +1,48 @@
+<%#
+ Copyright 2008 Steven Barth <steven@midlink.org>
+ Copyright 2008-2012 Jo-Philipp Wich <jow@openwrt.org>
+ Licensed to the public under the Apache License 2.0.
+-%>
+
+<%+header%>
+
+<div class="home-auth"><form method="post" action="<%=pcdata(FULL_REQUEST_URI)%>">
+<% if fuser then %><div class="alert-message warning" role="alert">Invalid username or password. Please try again.</div><% end %>
+<section class="home-card"><h1>Sign in to your router</h1><p class="auth-description">Use your router administrator account to manage your network.</p>
+<div class="auth-field"><label for="auth-username">Username</label><input id="auth-username" type="text" name="luci_username" value="<%=pcdata(duser or '')%>" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+<div class="auth-field"><label for="auth-password">Password</label><input id="auth-password" type="password" name="luci_password" autocomplete="current-password" required></div>
+<button type="submit" class="btn primary auth-submit">Sign in</button></section></form></div>
+<script type="text/javascript">//<![CDATA[
+	var input = document.getElementsByName('luci_password')[0];
+	if (input)
+		input.focus();
+//]]></script>
+
+<%
+local uci  = require "luci.model.uci".cursor()
+local fs  = require "nixio.fs"
+local https_key = uci:get("uhttpd", "main", "key")
+local https_port = uci:get("uhttpd", "main", "listen_https")
+if type(https_port) == "table" then
+	https_port = https_port[1]
+end
+
+if https_port and fs.access(https_key) then
+	https_port = https_port:match("(%d+)$")
+%>
+
+<script type="text/javascript">//<![CDATA[
+	if (document.location.protocol != 'https:') {
+		var url = 'https://' + window.location.hostname + ':' + '<%=https_port%>' + window.location.pathname;
+		var img=new Image;
+		img.onload=function(){window.location = url};
+		img.src='https://' + window.location.hostname + ':' + '<%=https_port%>' + '<%=resource%>/cbi/up.gif?' + Math.random();;
+		setTimeout(function(){
+			img.src=''
+		}, 5000);
+	}
+//]]></script>
+
+<% end %>
+
+<%+footer%>

@@ -1,0 +1,65 @@
+<!-- ++ BEGIN ++ Dynamic DNS ++ system_status.htm ++ -->
+<script type="text/javascript">//<![CDATA[
+
+	//start polling data every 30 second, this doesn't change so much
+	XHR.poll(30, '<%=url([[admin]], [[services]], [[ddns]], [[status]])%>', null,
+		function(x, data) {
+			if (data) {
+				var tbl = document.getElementById('ddns_status_table');
+				// security check
+				if ( !(tbl) ) { return; }
+
+				var rows = [];
+
+				// DDNS Service disabled
+                var notice=document.getElementById('ddns-disabled-notice');
+                if(data[0].enabled == 0){
+                    tbl.style.display='none';
+                    if(!notice){
+                        notice=document.createElement('div');notice.id='ddns-disabled-notice';notice.className='home-service-notice';
+                        var caption=document.createElement('span');caption.textContent='Dynamic DNS does not start automatically.';notice.appendChild(caption);
+                        var link=document.createElement('a');link.className='cbi-button';link.textContent='Enable autostart';notice.appendChild(link);
+                        document.getElementById('ddns_status_section').appendChild(notice);
+                    }
+                    notice.hidden=false;notice.querySelector('a').href=data[0].url_up;
+                    return;
+                }else{
+                    tbl.style.display='';if(notice)notice.hidden=true;
+					for(var j = 1; j < data.length; j++ )
+					{
+
+						rows.push([
+								'<strong>' + data[j].section + '</strong>', //configuration
+								data[j].datenextstat ? '<em>'+data[j].datenextstat+'</em>' : '<em>'+data[j].datenext+'</em>',
+								data[j].lookup ? data[j].lookup : '<em><%:config error%></em>',
+								data[j].reg_ip ? data[j].reg_ip : '<em><%:No data%></em>',
+								data[j].iface        // monitored interface
+								]);
+					}
+				}
+
+				cbi_update_table(tbl, rows, '<%:There is no service configured.%>');
+			}
+		}
+	);
+
+//]]></script>
+
+<fieldset class="cbi-section" id="ddns_status_section">
+	<legend><a href="<%=url([[admin]], [[services]], [[ddns]])%>"><%:Dynamic DNS%></a></legend>
+	<div class="cbi-section-node">
+		<div class="table" id="ddns_status_table">
+			<div class="tr table-titles" id="ddns_status_legend">
+				<div class="th"><%:Configuration%></div>
+				<div class="th"><%:Next Update%></div>
+				<div class="th"><%:Lookup Hostname%></div>
+				<div class="th"><%:Registered IP%></div>
+				<div class="th"><%:Network%></div>
+			</div>
+			<div class="tr">
+				<div class="td"><em><br /><%:Collecting data...%></em></div>
+			</div>
+		</div>
+	</div>
+</fieldset>
+<!-- ++ END ++ Dynamic DNS ++ system_status.htm ++ -->

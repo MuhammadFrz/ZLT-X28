@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+umask 077
+base=/data/home-tunnel
+control=/usr/libexec/home-tunnel-control
+[ -f "$base/enabled" ]
+"$control" guard
+pid=
+cleanup() {
+    if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null || true
+        for i in 1 2 3; do kill -0 "$pid" 2>/dev/null || break;sleep 1;done
+        kill -KILL "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+    rm -f /tmp/home-tunnel.pid
+    # Keep policy rules, firewall rejects and the blackhole route on exit.
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+"$base/bin/sing-box" run -c "$base/config.json" >"$base/runtime.log" 2>&1 &
+pid=$!
+echo "$pid" >/tmp/home-tunnel.pid
+ready=0
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid"
+    if ip link show x28tun >/dev/null 2>&1; then ready=1; break; fi
+    sleep 1
+done
+[ "$ready" -eq 1 ]
+"$control" attach
+wait "$pid"

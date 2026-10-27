@@ -1,158 +1,43 @@
+# ZLT X28 — Simple Home Router
 
-<img width="2560" height="589" alt="Image" src="https://github.com/user-attachments/assets/8ff5cd4a-b4da-4031-80ca-97b5a8a79fdb" />
+A community LuCI interface and router software overlay for the ZLT X28 vendor MT6890/OpenWrt 19.07 runtime. It retains the vendor kernel, modem and firmware base.
 
-# ZLT-X28 OpenWrt LuCI Fix
+Based on [EngineerMazeed/ZLT-X28](https://github.com/EngineerMazeed/ZLT-X28), originally authored by RVKSU. The upstream MIT license and copyright notice are retained in [LICENSE](LICENSE). This fork adds a redesigned interface, compatibility repairs and VPN management work. Third-party components retain their own licenses and notices.
 
-## Project Overview
-This project enables full OpenWrt functionality on ZLT-X28 routers while maintaining the original vendor firmware. Unlike standard OpenWrt installations, **your device continues running the manufacturer's firmware and web UI** (accessible on ports 80/443) while simultaneously providing access to OpenWrt's LuCI interface on port 4153. This approach preserves the stable vendor foundation while unlocking advanced OpenWrt features.
+**Preview software for the tested vendor runtime. This is source code, not a flashable firmware image or a general installer.** Installing an unrelated OpenWrt image is not part of this project. Review the verification limits before applying changes to a router.
 
-## Technical Background
-- **Default State**: ZLT-X28 routers ship with vendor firmware containing a limited web UI (ports 80/443)
-- **Unofficial OpenWrt**: These devices can run OpenWrt *alongside* vendor firmware, but the LuCI interface is broken in existing builds
-- **The Fix**: This solution repairs LuCI without modifying vendor components, enabling dual access:
-  - Vendor UI: Port 80/443 (original functionality)
-  - OpenWrt LuCI: Port 4153 (advanced features)
+## Improvements
 
-# Vendor Webui
-![Image](https://github.com/user-attachments/assets/30d24f56-7427-4be5-a1ff-5166e21217ee)
+- Home, Wi-Fi, devices, internet and settings pages with responsive layouts and SVG navigation.
+- Shared repairs for legacy LuCI forms, tabs, tables, toggles and status displays.
+- Xray-labelled whole-network proxy management using sing-box, including single-link and subscription imports, individual/all connection tests and sorting.
+- OpenVPN integration that handles vendor LAN policy routing, tunnel NAT, DNS and native acceleration for the explicitly managed profile.
+- Experimental IKEV2 profiles and native XFRM cleanup work.
 
-# OpenWrt LuCI Webui
-![LuCI Interface Working](https://github.com/user-attachments/assets/976432d9-e9b8-4433-8ad7-e8e724d81912)
+## What has been verified
 
+| Area | Scope and limits |
+| --- | --- |
+| Interface | Responsive pages and shared LuCI compatibility repairs; see the [verification summary](docs/STATUS.md). |
+| Xray-labelled proxy mode | Recorded LAN TCP/UDP, DNS, failure/recovery and reboot checks passed on the tested router. The implementation uses sing-box, which is separately installed. |
+| OpenVPN | A managed TCP profile passed real LAN HTTPS and TCP/UDP DNS, plus native Stop/Start verification. LAN integration requires explicit managed-profile hooks; authentication alone does not verify forwarding. OpenVPN reboot/startup and a new forced-outage test were not performed. See [OpenVPN limitations](docs/STATUS.md#openvpn). |
+| IKEV2 | Warm traffic and recovery checks passed, but automatic startup after a controlled restart was not verified. Activation remains gated. See [IKEV2 limitations](docs/STATUS.md#ikev2). |
 
-## Key Features Enabled
-- OpenVPN server/client configuration
-- Advanced firewall and network controls
-- QoS and bandwidth monitoring
-- Etc
+These are recorded results for one vendor runtime, not a guarantee for every X28 variant or network. No provider accounts, private connection configurations, credentials or subscription links are bundled.
 
-## Requirements
-1. Telnet access to router (typically enabled via command injection exploit)
-2. Root shell access (achieved through initial exploit)
-3. Internet connection on router
+## Access on the tested installation
 
-## Complete Installation Guide
+LuCI is available at `http://192.168.70.1:4153/cgi-bin/luci/`. The vendor interface remains on its existing ports. The VPN menu contains **IKEV2**, **OpenVPN** and **Xray**; on mobile, open Menu first. Your router's address can differ.
 
-### Step 1: Download Files Directly to Router
-Run these commands in router shell:
-### uhttpd
-```bash
-wget https://raw.githubusercontent.com/EngineerMazid/ZLT-X28/main/uhttpd -O /usr/sbin/uhttpd
-```
-### luci_fixed.tgz 
-```
-wget https://raw.githubusercontent.com/EngineerMazid/ZLT-X28/main/luci_fixed.tgz -O /tmp/luci_fixed.tgz
-chmod +x /usr/sbin/uhttpd
-```
-### Step 2: Install Fixed LuCI Components
-```bash
-tar xzf /tmp/luci_fixed.tgz -C /tmp
-cp -r /tmp/www/luci-static /www/
-cp -r /tmp/usr/lib/lua/luci /usr/lib/lua/
-cp -r /tmp/usr/share/luci /usr/share/
-rm /tmp/luci_fixed.tgz
-```
+For the managed whole-network modes, unexpected tunnel loss is intended to block internet traffic while local management remains reachable. Explicit Stop/Disable restores ordinary internet. Consult each mode's status document for the checks actually performed.
 
-### Step 3: Launch LuCI Interface
-```bash
-uhttpd -p 0.0.0.0:4153 -h /www &
-```
-Access OpenWrt at: http://[ROUTER_IP]:4153
+## Repository layout
 
-### Step 4: Set a root password
-You'll need this to log in to LuCl
-```bash
-passwd root
-```
+- `overlay/`: controllers, models, templates, theme assets, helpers and services.
+- `tests/`: Lua, JavaScript, shell and native-helper regression checks.
+- `tools/ikev2/`: build sources and guarded diagnostic tools; these are not unattended installation scripts.
+- `docs/`: public verification summary, limitations and the [original upstream README](docs/UPSTREAM_README.md). Private router audit reports are excluded.
+- Original upstream archives and `uhttpd`: retained upstream assets.
+- `SHA256SUMS.json`: packaged source integrity manifest, excluding itself.
 
-### Step 5: Fix UI OpenWrt Language and Style Error
-Open the config file: 
-`vi /etc/config/luci`
-```bash
-config core 'main'
-        option lang 'auto'
-        option mediaurlbase '/luci-static/bootstrap'
-        option resourcebase '/luci-static/resources'
-        option ubuspath '/ubus/'
-
-config extern 'flash_keep'
-        option uci '/etc/config/'
-        option dropbear '/etc/dropbear/'
-        option openvpn '/etc/openvpn/'
-        option passwd '/etc/passwd'
-        option opkg '/etc/opkg.conf'
-        option firewall '/etc/firewall.user'
-        option uploads '/lib/uci/upload/'
-
-config internal 'languages'
-
-config internal 'sauth'
-        option sessionpath '/tmp/luci-sessions'
-        option sessiontime '3600'
-
-config internal 'ccache'
-        option enable '1'
-
-config internal 'themes'
-        option Bootstrap '/luci-static/bootstrap'
-
-config internal 'apply'
-        option rollback '90'
-        option holdoff '4'
-        option timeout '5'
-        option display '1.5'
-
-config internal 'diag'
-        option dns 'openwrt.org'
-        option ping 'openwrt.org'
-        option route 'openwrt.org'
-```
-
-Save it and you’re done. That should fix the UI issues.
-
-### Step 6 (Optional): Restore Default LuCI
-If things are totally messed up or you get errors, you can remove the old LuCI and reinstall the stock one:
-```bash
-rm -rf /usr/lib/lua/luci
-rm -rf /www/luci-static
-rm -rf /usr/share/luci
-rm -f /etc/config/luci
-rm -f /www/cgi-bin/luci 
-```
-Then download and extract fresh Luci :
-
-```bash
-cd /tmp
-wget https://raw.githubusercontent.com/EngineerMazid/ZLT-X28/main/zltx28_luci_stock_full.tgz -O /tmp/zltx28_luci_stock_full.tgz
-cd /
-tar xzf /tmp/zltx28_luci_stock_full.tgz
-```
-That’ll restore everything to default without errors.
-
-```
-uci commit luci
-killall uhttpd
-uhttpd -p 0.0.0.0:4153 -h /www &
-```
-
-
-## Persistence Across Reboots
-Add these lines to your startup script:
-```bash
-# /etc/rc.local
-uhttpd -p 0.0.0.0:4153 -h /www &
-exit 0
-```
-### ⚠️ Critical Warnings
-One wrong step can fry your ZLT-X28 router for good. Using the wrong firmware or architecture will break both the LuCI WebUI and the vendor’s original interface. When that happens, your device is totally bricked with no easy way to recover.
-
-The stock vendor firmware works fine for most folks, but this OpenWrt version gives you full access, and full risk. It’s based on an old, unofficial OpenWrt LuCI with known bugs. Because of architecture differences, official OpenWrt packages won’t install or run properly.
-
-If you mess up and brick your router, that’s on you, no backups, no help, no do-overs. The only way to fix it is flashing the entire firmware from a working ZLT-X28. So yeah, you’re basically on your own here.
-
-
-## Maintained with ✨️ by [EngineerMazid](https://github.com/EngineerMazid)
-*Not affiliated with ZLT or OpenWrt project*
-
-## License
-This project is licensed under the [MIT License](https://github.com/EngineerMazid/ZLT-X28/blob/main/LICENSE).
+Lua 5.1 tests take their corresponding model/script path; JavaScript regression checks run with Node. Native routing and acceleration checks require the matching vendor runtime. Do not publish router dumps or provider credentials when sharing diagnostic results.

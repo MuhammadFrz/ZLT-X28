@@ -1,0 +1,12 @@
+[GNUPG:] NEWSIG
+gpg: Signature made Sun Sep  6 07:00:54 2026 UTC
+gpg:                using RSA key 948F158A4E76A27BF3D07532DF42C170B34DBA77
+[GNUPG:] KEY_CONSIDERED 948F158A4E76A27BF3D07532DF42C170B34DBA77 0
+[GNUPG:] SIG_ID pbbKSC3f36kwmsLAjDYMqd2wAmA 2026-09-06 1788678054
+[GNUPG:] GOODSIG DF42C170B34DBA77 Andreas Steffen <andreas.steffen@strongswan.org>
+gpg: Good signature from "Andreas Steffen <andreas.steffen@strongswan.org>" [unknown]
+[GNUPG:] VALIDSIG 948F158A4E76A27BF3D07532DF42C170B34DBA77 2026-09-06 1788678054 0 4 0 1 10 00 948F158A4E76A27BF3D07532DF42C170B34DBA77
+[GNUPG:] TRUST_UNDEFINED 0 pgp
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: 948F 158A 4E76 A27B F3D0  7532 DF42 C170 B34D BA77

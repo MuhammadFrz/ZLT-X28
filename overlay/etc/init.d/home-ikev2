@@ -1,0 +1,15 @@
+#!/bin/sh /etc/rc.common
+START=18
+STOP=10
+USE_PROCD=1
+start_service() {
+ [ -f /data/home-ikev2/enabled ] || return 0
+ procd_open_instance
+ procd_set_param command /usr/libexec/home-ikev2-run
+ procd_set_param respawn 3600 3 0
+ procd_set_param term_timeout 12
+ procd_close_instance
+}
+stop_service() {
+ if [ -f /data/home-ikev2/enabled ]; then /usr/libexec/home-ikev2-control guard;fi
+}
